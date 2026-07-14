@@ -1,4 +1,3 @@
-using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RachaContas.Bot.Data;
 using RachaContas.Bot.Models;
@@ -31,6 +30,7 @@ public class UpdateHandler(
                 "/start" => Boas_Vindas,
                 "/entrar" => await EntrarAsync(chatId, message.From, ct),
                 "/despesa" => await DespesaAsync(chatId, message.From, texto, ct),
+                "/desfazer" => await DesfazerAsync(chatId, message.From, ct),
                 "/saldo" => await SaldoAsync(chatId, ct),
                 "/fechar" => await FecharAsync(chatId, ct),
                 "/extrato" => await ExtratoAsync(chatId, ct),
@@ -57,6 +57,7 @@ public class UpdateHandler(
         "Oi! Eu divido as contas do grupo pra você.\n\n" +
         "/entrar — entra na resenha\n" +
         "/despesa <valor> <descrição> — lança um gasto, dividido igual entre quem já entrou\n" +
+        "/desfazer — apaga a sua última despesa lançada\n" +
         "/saldo — quem deve e quem tem a receber\n" +
         "/fechar — calcula as transferências mínimas pra quitar tudo\n" +
         "/extrato — últimos gastos lançados";
@@ -108,6 +109,31 @@ public class UpdateHandler(
         var cota = valor / participantesDoGrupo.Count;
         var pessoas = participantesDoGrupo.Count == 1 ? "1 pessoa (só você por enquanto)" : $"{participantesDoGrupo.Count} pessoas";
         return $"Beleza! {NomeDe(from)} pagou {valor:C} em \"{descricao}\", dividido entre {pessoas} ({cota:C} cada).";
+    }
+
+    private async Task<string> DesfazerAsync(long chatId, User from, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return "Não tem nada pra desfazer ainda.";
+
+        var pagador = await db.Participantes.FirstOrDefaultAsync(p => p.GrupoId == grupo.Id && p.TelegramUserId == from.Id, ct);
+        if (pagador is null)
+            return "Você ainda não lançou nenhuma despesa.";
+
+        var ultima = await db.Despesas
+            .Where(d => d.GrupoId == grupo.Id && d.PagoPorParticipanteId == pagador.Id)
+            .OrderByDescending(d => d.CriadoEm)
+            .FirstOrDefaultAsync(ct);
+
+        if (ultima is null)
+            return "Você não tem nenhuma despesa lançada pra desfazer.";
+
+        db.Despesas.Remove(ultima);
+        await db.SaveChangesAsync(ct);
+
+        return $"Desfeito: \"{ultima.Descricao}\" de {ultima.Valor:C}.";
     }
 
     private async Task<string> SaldoAsync(long chatId, CancellationToken ct)
@@ -215,14 +241,11 @@ public class UpdateHandler(
             tokenValor = tokenValor[2..];
         }
 
-        if (!TentarParsearValor(tokenValor, out valor))
+        if (!ValorParser.TentarParsear(tokenValor, out valor))
             return false;
 
         descricao = string.Join(' ', partes.Skip(indiceValor + 1));
         return !string.IsNullOrWhiteSpace(descricao);
     }
 
-    private static bool TentarParsearValor(string texto, out decimal valor) =>
-        decimal.TryParse(texto, NumberStyles.Number, CultureInfo.InvariantCulture, out valor) ||
-        decimal.TryParse(texto, NumberStyles.Number, new CultureInfo("pt-BR"), out valor);
 }
