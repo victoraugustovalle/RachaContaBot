@@ -15,6 +15,8 @@ if (!string.IsNullOrWhiteSpace(telegramToken))
     builder.Services.AddSingleton<ITelegramBotClient>(new TelegramBotClient(telegramToken));
 
 builder.Services.AddSingleton<SaldoCalculator>();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<CambioService>();
 builder.Services.AddSingleton<UpdateHandler>();
 builder.Services.AddHostedService<Worker>();
 

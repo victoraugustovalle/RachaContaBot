@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Text.Json;
 
 namespace RachaContas.Bot.Services;
@@ -8,7 +9,7 @@ namespace RachaContas.Bot.Services;
 /// Cache em memória por (moeda, dia): a cotação só muda uma vez por dia, não
 /// faz sentido bater na API de novo a cada despesa lançada no mesmo dia.
 /// </summary>
-public class CambioService(HttpClient httpClient, ILogger<CambioService> logger)
+public class CambioService(IHttpClientFactory httpClientFactory, ILogger<CambioService> logger)
 {
     private readonly ConcurrentDictionary<(string Moeda, DateOnly Dia), decimal> _cache = new();
 
@@ -21,7 +22,8 @@ public class CambioService(HttpClient httpClient, ILogger<CambioService> logger)
 
         try
         {
-            var json = await httpClient.GetStringAsync(
+            var client = httpClientFactory.CreateClient();
+            var json = await client.GetStringAsync(
                 $"https://api.frankfurter.dev/v1/latest?base={chave.Moeda}&symbols=BRL", ct);
 
             var taxa = ExtrairTaxaBRL(json);

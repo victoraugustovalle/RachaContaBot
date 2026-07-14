@@ -13,11 +13,18 @@ namespace RachaContas.Bot.Bot;
 public class UpdateHandler(
     IDbContextFactory<AppDbContext> dbFactory,
     SaldoCalculator saldoCalculator,
+    CambioService cambioService,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
-    private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto, ConfirmandoLimpeza }
+    private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto, ConfirmandoLimpeza, ConfirmandoMoedaEstrangeira }
 
-    private record EstadoConversa(EtapaFluxo Etapa, IReadOnlyList<int> DespesaIds, int? DespesaIdEscolhida = null);
+    private record EstadoConversa(
+        EtapaFluxo Etapa,
+        IReadOnlyList<int> DespesaIds,
+        int? DespesaIdEscolhida = null,
+        string? MoedaPendente = null,
+        decimal? ValorOriginalPendente = null,
+        string? DescricaoPendente = null);
 
     // Estado por (chat, usuário) de um fluxo /editar ou /excluir em andamento.
     // UpdateHandler é singleton, então isso sobrevive entre mensagens — mas
@@ -81,7 +88,8 @@ public class UpdateHandler(
     private const string Boas_Vindas =
         "Oi! Eu divido as contas do grupo pra você.\n\n" +
         "/entrar — entra na resenha\n" +
-        "/despesa <valor> <descrição> — lança um gasto, dividido igual entre quem já entrou\n" +
+        "/despesa <valor> <descrição> — lança um gasto, dividido igual entre quem já entrou " +
+        "(aceita moeda estrangeira, ex.: $50 uber — eu confirmo e converto pra você)\n" +
         "/desfazer — apaga a sua última despesa lançada\n" +
         "/editar — corrige um lançamento (mostra a lista, você escolhe o número)\n" +
         "/excluir — remove um lançamento (mostra a lista, você escolhe o número)\n" +
@@ -108,7 +116,7 @@ public class UpdateHandler(
 
     private async Task<string> DespesaAsync(long chatId, User from, string texto, CancellationToken ct)
     {
-        if (!TentarExtrairValorEDescricao(texto, out var valor, out var descricao) || valor <= 0)
+        if (!TentarExtrairDespesa(texto, out var valor, out var moeda, out var descricao) || valor <= 0)
             return "Formato: /despesa <valor> <descrição>. Ex.: /despesa 45,50 Uber pro aeroporto";
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -118,6 +126,48 @@ public class UpdateHandler(
         if (pagador is null)
             return $"{NomeDe(from)}, manda /entrar primeiro antes de lançar uma despesa.";
 
+        if (moeda is not null)
+        {
+            var chave = (chatId, from.Id);
+            _estados[chave] = new EstadoConversa(EtapaFluxo.ConfirmandoMoedaEstrangeira, [],
+                MoedaPendente: moeda, ValorOriginalPendente: valor, DescricaoPendente: descricao);
+
+            return $"Essa despesa foi lançada em {NomeDaMoeda(moeda)} ({FormatarValorEstrangeiro(valor, moeda)}) — " +
+                   "confirma? Manda /confirmar pra seguir, ou /cancelar.";
+        }
+
+        return await CriarDespesaAsync(db, grupo, pagador, descricao, valor, null, null, null, ct);
+    }
+
+    private async Task<string> ConcluirConfirmacaoMoedaAsync((long ChatId, long UserId) chave, EstadoConversa estado, string texto, CancellationToken ct)
+    {
+        if (!texto.Trim().Equals("/confirmar", StringComparison.OrdinalIgnoreCase))
+        {
+            _estados.TryRemove(chave, out _);
+            return "Lançamento cancelado — nada foi salvo.";
+        }
+
+        var taxa = await cambioService.ObterTaxaParaBrlAsync(estado.MoedaPendente!, ct);
+        if (taxa is null)
+            return "Não consegui buscar a cotação agora — manda /confirmar de novo em instantes, ou /cancelar.";
+
+        _estados.TryRemove(chave, out _);
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterOuCriarGrupoAsync(db, chave.ChatId, ct);
+        var pagador = await db.Participantes.FirstOrDefaultAsync(p => p.GrupoId == grupo.Id && p.TelegramUserId == chave.UserId, ct);
+        if (pagador is null)
+            return "Você saiu da resenha antes de confirmar — o lançamento foi perdido.";
+
+        var valorBrl = Math.Round(estado.ValorOriginalPendente!.Value * taxa.Value, 2);
+        return await CriarDespesaAsync(db, grupo, pagador, estado.DescricaoPendente!, valorBrl,
+            estado.MoedaPendente, estado.ValorOriginalPendente, taxa, ct);
+    }
+
+    private static async Task<string> CriarDespesaAsync(
+        AppDbContext db, Grupo grupo, Participante pagador, string descricao, decimal valorBrl,
+        string? moedaOriginal, decimal? valorOriginal, decimal? taxaCambio, CancellationToken ct)
+    {
         var participantesDoGrupo = await db.Participantes.Where(p => p.GrupoId == grupo.Id).ToListAsync(ct);
 
         var despesa = new Despesa
@@ -125,7 +175,10 @@ public class UpdateHandler(
             GrupoId = grupo.Id,
             PagoPorParticipanteId = pagador.Id,
             Descricao = descricao,
-            Valor = valor,
+            Valor = valorBrl,
+            MoedaOriginal = moedaOriginal,
+            ValorOriginal = valorOriginal,
+            TaxaCambio = taxaCambio,
         };
         despesa.Participantes = participantesDoGrupo
             .Select(p => new DespesaParticipante { ParticipanteId = p.Id })
@@ -134,9 +187,11 @@ public class UpdateHandler(
         db.Despesas.Add(despesa);
         await db.SaveChangesAsync(ct);
 
-        var cota = valor / participantesDoGrupo.Count;
+        var cota = valorBrl / participantesDoGrupo.Count;
         var pessoas = participantesDoGrupo.Count == 1 ? "1 pessoa (só você por enquanto)" : $"{participantesDoGrupo.Count} pessoas";
-        return $"Beleza! {NomeDe(from)} pagou {valor:C} em \"{descricao}\", dividido entre {pessoas} ({cota:C} cada).";
+        var origem = moedaOriginal is not null ? $" ({FormatarValorEstrangeiro(valorOriginal!.Value, moedaOriginal)} convertido)" : "";
+
+        return $"Beleza! {pagador.Nome} pagou {valorBrl:C}{origem} em \"{descricao}\", dividido entre {pessoas} ({cota:C} cada).";
     }
 
     private async Task<string> DesfazerAsync(long chatId, User from, CancellationToken ct)
@@ -175,6 +230,7 @@ public class UpdateHandler(
             EtapaFluxo.EscolhendoParaEditar => Task.FromResult(AvancarParaTextoDeEdicao(chave, estado, texto)),
             EtapaFluxo.AguardandoNovoTexto => ConcluirEdicaoAsync(chave, estado, texto, ct),
             EtapaFluxo.ConfirmandoLimpeza => ConcluirLimpezaAsync(chave, chave.ChatId, texto, ct),
+            EtapaFluxo.ConfirmandoMoedaEstrangeira => ConcluirConfirmacaoMoedaAsync(chave, estado, texto, ct),
             _ => Task.FromResult("Deu ruim no meio do fluxo — manda /cancelar e tenta de novo."),
         };
     }
@@ -302,6 +358,10 @@ public class UpdateHandler(
 
         despesa.Valor = valor;
         despesa.Descricao = descricao;
+        // A edição vira a nova verdade em BRL — não mantém moeda/cotação antigas, que ficariam inconsistentes.
+        despesa.MoedaOriginal = null;
+        despesa.ValorOriginal = null;
+        despesa.TaxaCambio = null;
         await db.SaveChangesAsync(ct);
 
         return $"Corrigido: agora é {valor:C} ({descricao}).";
@@ -362,7 +422,15 @@ public class UpdateHandler(
         if (despesas.Count == 0)
             return "Nenhuma despesa lançada ainda.";
 
-        var linhas = despesas.Select(d => $"{d.CriadoEm:dd/MM} — {d.PagoPor?.Nome} pagou {d.Valor:C} ({d.Descricao})");
+        var linhas = despesas.Select(d =>
+        {
+            var valorFormatado = d.MoedaOriginal is not null && d.ValorOriginal is not null
+                ? $"{FormatarValorEstrangeiro(d.ValorOriginal.Value, d.MoedaOriginal)} ({d.Valor:C})"
+                : d.Valor.ToString("C");
+
+            return $"{d.CriadoEm:dd/MM} — {d.PagoPor?.Nome} pagou {valorFormatado} ({d.Descricao})";
+        });
+
         return "Últimas despesas:\n" + string.Join('\n', linhas);
     }
 
@@ -385,13 +453,39 @@ public class UpdateHandler(
         string.IsNullOrWhiteSpace(user.LastName) ? user.FirstName : $"{user.FirstName} {user.LastName}";
 
     /// <summary>
-    /// Extrai valor e descrição de "/despesa &lt;valor&gt; &lt;descrição&gt;", aceitando
-    /// o "R$" opcional colado ("R$50,00") ou separado ("R$ 50,00") do número.
+    /// Extrai valor, moeda (null = BRL, sem conversão) e descrição de
+    /// "/despesa &lt;valor&gt; &lt;descrição&gt;", via MoedaParser (símbolo $/€/£
+    /// ou código de 3 letras) + ValorParser (vírgula/ponto decimal).
     /// </summary>
-    private static bool TentarExtrairValorEDescricao(string texto, out decimal valor, out string descricao) =>
-        TentarExtrairValorEDescricaoDoIndice(texto, indiceInicial: 1, out valor, out descricao);
+    private static bool TentarExtrairDespesa(string texto, out decimal valor, out string? moeda, out string descricao)
+    {
+        valor = 0;
+        moeda = null;
+        descricao = string.Empty;
 
-    /// <summary>Mesma extração, mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar.</summary>
+        var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (!MoedaParser.TentarExtrair(partes, indiceInicial: 1, out valor, out moeda, out var proximoIndice))
+            return false;
+
+        descricao = string.Join(' ', partes.Skip(proximoIndice));
+        return !string.IsNullOrWhiteSpace(descricao);
+    }
+
+    private static string NomeDaMoeda(string codigo) => codigo switch
+    {
+        "USD" => "Dólar",
+        "EUR" => "Euro",
+        "GBP" => "Libra",
+        _ => codigo,
+    };
+
+    private static string FormatarValorEstrangeiro(decimal valor, string moeda)
+    {
+        var simbolo = moeda switch { "USD" => "US$", "EUR" => "€", "GBP" => "£", _ => moeda + " " };
+        return $"{simbolo}{valor:N2}";
+    }
+
+    /// <summary>Mesma ideia, mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar. Não detecta moeda estrangeira (edição sempre volta a ser BRL).</summary>
     private static bool TentarExtrairValorEDescricaoLivre(string texto, out decimal valor, out string descricao) =>
         TentarExtrairValorEDescricaoDoIndice(texto, indiceInicial: 0, out valor, out descricao);
 
