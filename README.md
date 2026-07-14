@@ -9,21 +9,31 @@ Projeto de portfólio — conecta com algo que já existe no autor: vários repo
 - **.NET 10** — Worker Service (processo único, roda em segundo plano)
 - **Telegram.Bot 22** (SDK oficial) — long-polling, sem precisar de URL pública/HTTPS
 - **EF Core + SQLite**
-- **xUnit** — 9 testes: o algoritmo de simplificação isolado (dados sintéticos) e a integração completa banco → cálculo de saldo → simplificação (SQLite em memória)
+- **api.frankfurter.dev** — cotação do dia, gratuita, sem chave, sem cadastro
+- **xUnit** — 36 testes: algoritmo de simplificação isolado, cálculo de saldo com SQLite em memória, parser de valor (vírgula/ponto), detecção de moeda estrangeira e extração da cotação
 
 ## Comandos
 
 - `/entrar` — registra quem mandou o comando como participante do grupo
-- `/despesa <valor> <descrição>` — lança um gasto pago por quem mandou, dividido igual entre todos os participantes já registrados (ex.: `/despesa 45,50 Uber pro aeroporto`)
+- `/despesa <valor> <descrição>` — lança um gasto pago por quem mandou, dividido igual entre todos os participantes já registrados (ex.: `/despesa 45,50 Uber pro aeroporto`). Aceita moeda estrangeira (`$50`, `US$ 50`, `€30`, `50 USD`) — o bot confirma a conversão antes de salvar
+- `/desfazer` — apaga a sua última despesa lançada
+- `/editar` — corrige um lançamento (mostra a lista numerada, você escolhe)
+- `/excluir` — remove um lançamento (mostra a lista numerada, você escolhe)
+- `/limpar` — apaga todas as despesas do grupo (pede confirmação explícita)
 - `/saldo` — mostra quem deve e quem tem a receber
 - `/fechar` — calcula as transferências mínimas pra zerar as contas do grupo
-- `/extrato` — lista as últimas despesas lançadas
+- `/extrato` — lista as últimas despesas lançadas (mostra valor original + convertido quando for moeda estrangeira)
+- `/cancelar` — sai de qualquer fluxo em andamento (editar/excluir/limpar/confirmar moeda) sem alterar nada
 
-Fora do escopo desta versão: divisão customizada por pessoa (só igual, por enquanto), edição/exclusão de despesa, múltiplas moedas.
+Fora do escopo desta versão: divisão customizada por pessoa (só igual, por enquanto).
 
 ## O algoritmo
 
 `DebtSimplifier` (em `RachaContas.Bot/Services/DebtSimplifier.cs`) recebe o saldo líquido de cada participante (o que pagou menos sua cota) e vai casando repetidamente o maior credor com o maior devedor até zerar todo mundo — abordagem gulosa, a mesma usada na prática por apps reais. **Nota honesta**: não é garantidamente o número ótimo global de transferências (esse problema é NP-difícil em geral) — é uma boa aproximação, simples de entender e de testar.
+
+## Moeda estrangeira
+
+`Despesa.Valor` é *sempre* o valor em BRL — é o único campo que `SaldoCalculator`/`DebtSimplifier` enxergam. Quando `/despesa` detecta um símbolo ($, €, £) ou código (USD, EUR, CAD...) diferente de BRL, o bot **não salva na hora**: pergunta a confirmação, busca a cotação do dia (com cache em memória por moeda/dia) e só então converte e salva, guardando também o valor original e a taxa usada para exibir no `/extrato`. Editar uma despesa que tinha moeda estrangeira via `/editar` zera esses campos — o valor editado vira a nova verdade em BRL.
 
 ## Rodando localmente
 
@@ -48,12 +58,17 @@ Sem token do Telegram configurado, o processo sobe normalmente e só loga um avi
 
 ```
 RachaContas.Bot/
-  Models/       Grupo, Participante, Despesa, DespesaParticipante
+  Models/       Grupo, Participante, Despesa (com MoedaOriginal/ValorOriginal/TaxaCambio), DespesaParticipante
   Data/         AppDbContext (EF Core + SQLite)
-  Services/     DebtSimplifier (algoritmo puro), SaldoCalculator (lê o banco)
-  Bot/          UpdateHandler (roteia os comandos do Telegram)
+  Services/     DebtSimplifier (algoritmo puro), SaldoCalculator (lê o banco),
+                ValorParser (vírgula/ponto decimal), MoedaParser (detecta moeda estrangeira),
+                CambioService (cotação via Frankfurter, com cache)
+  Bot/          UpdateHandler (roteia comandos + fluxos conversacionais de editar/excluir/limpar/moeda)
   Worker.cs     BackgroundService que inicia o long-polling
 RachaContas.Tests/
   DebtSimplifierTests.cs     algoritmo isolado, dados sintéticos
   SaldoCalculatorTests.cs    integração real com SQLite em memória, banco -> saldo -> simplificação
+  ValorParserTests.cs        vírgula/ponto decimal e milhar
+  MoedaParserTests.cs        detecção de símbolo/código de moeda
+  CambioServiceTests.cs      extração da cotação de um JSON de exemplo (sem rede)
 ```
