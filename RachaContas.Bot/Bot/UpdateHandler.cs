@@ -348,7 +348,8 @@ public class UpdateHandler(
     {
         _estados.TryRemove(chave, out _);
 
-        if (!TentarExtrairValorEDescricaoLivre(texto, out var valor, out var descricao) || valor <= 0)
+        // "moeda" é ignorada de propósito: edição sempre vira BRL puro (ver comentário abaixo).
+        if (!TentarExtrairValorEDescricaoLivre(texto, out var valor, out _, out var descricao) || valor <= 0)
             return "Formato inválido — o lançamento não foi alterado. Manda /editar de novo se quiser tentar outra vez.";
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
@@ -454,21 +455,13 @@ public class UpdateHandler(
 
     /// <summary>
     /// Extrai valor, moeda (null = BRL, sem conversão) e descrição de
-    /// "/despesa &lt;valor&gt; &lt;descrição&gt;", via MoedaParser (símbolo $/€/£
-    /// ou código de 3 letras) + ValorParser (vírgula/ponto decimal).
+    /// "/despesa &lt;valor&gt; &lt;descrição&gt;" — aceita também o formato invertido
+    /// ("/despesa &lt;descrição&gt; &lt;valor&gt;"), erro de digitação comum.
     /// </summary>
     private static bool TentarExtrairDespesa(string texto, out decimal valor, out string? moeda, out string descricao)
     {
-        valor = 0;
-        moeda = null;
-        descricao = string.Empty;
-
         var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (!MoedaParser.TentarExtrair(partes, indiceInicial: 1, out valor, out moeda, out var proximoIndice))
-            return false;
-
-        descricao = string.Join(' ', partes.Skip(proximoIndice));
-        return !string.IsNullOrWhiteSpace(descricao);
+        return DespesaTextoParser.TentarExtrair(partes, indiceInicial: 1, out valor, out moeda, out descricao);
     }
 
     private static string NomeDaMoeda(string codigo) => codigo switch
@@ -485,39 +478,15 @@ public class UpdateHandler(
         return $"{simbolo}{valor:N2}";
     }
 
-    /// <summary>Mesma ideia, mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar. Não detecta moeda estrangeira (edição sempre volta a ser BRL).</summary>
-    private static bool TentarExtrairValorEDescricaoLivre(string texto, out decimal valor, out string descricao) =>
-        TentarExtrairValorEDescricaoDoIndice(texto, indiceInicial: 0, out valor, out descricao);
-
-    private static bool TentarExtrairValorEDescricaoDoIndice(string texto, int indiceInicial, out decimal valor, out string descricao)
+    /// <summary>
+    /// Mesma extração de valor/descrição (aceitando os dois formatos, oficial e invertido),
+    /// mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar.
+    /// "moeda" é devolvida só porque a assinatura é compartilhada; quem chama a ignora
+    /// de propósito (edição sempre volta a ser BRL puro).
+    /// </summary>
+    private static bool TentarExtrairValorEDescricaoLivre(string texto, out decimal valor, out string? moeda, out string descricao)
     {
-        valor = 0;
-        descricao = string.Empty;
-
         var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (partes.Length < indiceInicial + 2)
-            return false;
-
-        var indiceValor = indiceInicial;
-        var tokenValor = partes[indiceValor];
-
-        if (tokenValor.Equals("R$", StringComparison.OrdinalIgnoreCase))
-        {
-            indiceValor++;
-            if (indiceValor >= partes.Length)
-                return false;
-            tokenValor = partes[indiceValor];
-        }
-        else if (tokenValor.StartsWith("R$", StringComparison.OrdinalIgnoreCase))
-        {
-            tokenValor = tokenValor[2..];
-        }
-
-        if (!ValorParser.TentarParsear(tokenValor, out valor))
-            return false;
-
-        descricao = string.Join(' ', partes.Skip(indiceValor + 1));
-        return !string.IsNullOrWhiteSpace(descricao);
+        return DespesaTextoParser.TentarExtrair(partes, indiceInicial: 0, out valor, out moeda, out descricao);
     }
-
 }
