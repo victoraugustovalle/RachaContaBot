@@ -33,10 +33,21 @@ namespace RachaContas.Bot.Migrations
                     b.Property<int>("GrupoId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("MoedaOriginal")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("PagoPorParticipanteId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<decimal?>("TaxaCambio")
+                        .HasPrecision(10, 4)
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("Valor")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("ValorOriginal")
                         .HasPrecision(10, 2)
                         .HasColumnType("TEXT");
 

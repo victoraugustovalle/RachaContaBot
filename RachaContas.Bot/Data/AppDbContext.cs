@@ -24,6 +24,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             .Property(d => d.Valor)
             .HasPrecision(10, 2);
 
+        modelBuilder.Entity<Despesa>()
+            .Property(d => d.ValorOriginal)
+            .HasPrecision(10, 2);
+
+        modelBuilder.Entity<Despesa>()
+            .Property(d => d.TaxaCambio)
+            .HasPrecision(10, 4);
+
         // Sem isso, o EF não casa a navegação PagoPor com PagoPorParticipanteId
         // (o nome não bate com a convenção automática) e cria uma FK sombra
         // separada, nula, que nunca é preenchida pelo código.
