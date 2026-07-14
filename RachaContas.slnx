@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="RachaContas.Bot/RachaContas.Bot.csproj" />
+  <Project Path="RachaContas.Tests/RachaContas.Tests.csproj" />
+</Solution>
