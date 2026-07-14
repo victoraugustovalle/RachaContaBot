@@ -97,6 +97,41 @@ public class SaldoCalculatorTests : IDisposable
     }
 
     [Fact]
+    public async Task DoBancoAoFechar_ProduzTransferenciasMinimas()
+    {
+        // Mesmo cenário do teste acima (VariasDespesas), mas indo até o fim:
+        // banco -> SaldoCalculator -> DebtSimplifier, igual o comando /fechar faz de verdade.
+        var grupo = new Grupo { TelegramChatId = 4 };
+        var ana = new Participante { Grupo = grupo, TelegramUserId = 70, Nome = "Ana" };
+        var bia = new Participante { Grupo = grupo, TelegramUserId = 80, Nome = "Bia" };
+        var caio = new Participante { Grupo = grupo, TelegramUserId = 90, Nome = "Caio" };
+        _db.Grupos.Add(grupo);
+        _db.Participantes.AddRange(ana, bia, caio);
+        await _db.SaveChangesAsync();
+
+        var d1 = new Despesa { GrupoId = grupo.Id, PagoPorParticipanteId = ana.Id, Descricao = "Mercado", Valor = 90m };
+        d1.Participantes.Add(new DespesaParticipante { ParticipanteId = ana.Id });
+        d1.Participantes.Add(new DespesaParticipante { ParticipanteId = bia.Id });
+        d1.Participantes.Add(new DespesaParticipante { ParticipanteId = caio.Id });
+
+        var d2 = new Despesa { GrupoId = grupo.Id, PagoPorParticipanteId = bia.Id, Descricao = "Gasolina", Valor = 30m };
+        d2.Participantes.Add(new DespesaParticipante { ParticipanteId = ana.Id });
+        d2.Participantes.Add(new DespesaParticipante { ParticipanteId = bia.Id });
+        d2.Participantes.Add(new DespesaParticipante { ParticipanteId = caio.Id });
+
+        _db.Despesas.AddRange(d1, d2);
+        await _db.SaveChangesAsync();
+
+        var saldos = await _calculator.CalcularAsync(_db, grupo.Id);
+        var transferencias = RachaContas.Bot.Services.DebtSimplifier.Simplificar(saldos);
+
+        // Ana:+50, Bia:-10, Caio:-40 -> Caio paga 40 pra Ana, Bia paga 10 pra Ana (2 transferências, não 3+).
+        Assert.Equal(2, transferencias.Count);
+        Assert.All(transferencias, t => Assert.Equal("Ana", t.Para));
+        Assert.Equal(50m, transferencias.Sum(t => t.Valor));
+    }
+
+    [Fact]
     public async Task GrupoSemDespesas_TodosComSaldoZero()
     {
         var grupo = new Grupo { TelegramChatId = 3 };

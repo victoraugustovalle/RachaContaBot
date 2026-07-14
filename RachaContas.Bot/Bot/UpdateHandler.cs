@@ -32,6 +32,7 @@ public class UpdateHandler(
                 "/entrar" => await EntrarAsync(chatId, message.From, ct),
                 "/despesa" => await DespesaAsync(chatId, message.From, texto, ct),
                 "/saldo" => await SaldoAsync(chatId, ct),
+                "/fechar" => await FecharAsync(chatId, ct),
                 "/extrato" => await ExtratoAsync(chatId, ct),
                 _ => (string?)null,
             };
@@ -132,6 +133,23 @@ public class UpdateHandler(
         });
 
         return "Saldos:\n" + string.Join('\n', linhas);
+    }
+
+    private async Task<string> FecharAsync(long chatId, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return "Ainda não tem ninguém na resenha — manda /entrar primeiro.";
+
+        var saldos = await saldoCalculator.CalcularAsync(db, grupo.Id, ct);
+        var transferencias = DebtSimplifier.Simplificar(saldos);
+
+        if (transferencias.Count == 0)
+            return "Já tá tudo quite — ninguém deve nada pra ninguém.";
+
+        var linhas = transferencias.Select(t => $"{t.De} paga {t.Valor:C} pra {t.Para}");
+        return "Pra fechar a conta:\n" + string.Join('\n', linhas);
     }
 
     private async Task<string> ExtratoAsync(long chatId, CancellationToken ct)
