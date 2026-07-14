@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using RachaContas.Bot.Data;
 using RachaContas.Bot.Models;
@@ -14,6 +15,15 @@ public class UpdateHandler(
     SaldoCalculator saldoCalculator,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
+    private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto }
+
+    private record EstadoConversa(EtapaFluxo Etapa, IReadOnlyList<int> DespesaIds, int? DespesaIdEscolhida = null);
+
+    // Estado por (chat, usuário) de um fluxo /editar ou /excluir em andamento.
+    // UpdateHandler é singleton, então isso sobrevive entre mensagens — mas
+    // some se o bot reiniciar (aceitável: é só um "estou no meio de uma ação").
+    private readonly ConcurrentDictionary<(long ChatId, long UserId), EstadoConversa> _estados = new();
+
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken ct)
     {
         var message = update.Message;
@@ -21,29 +31,43 @@ public class UpdateHandler(
             return;
 
         var chatId = message.Chat.Id;
-        var comando = texto.Split(' ', 2)[0].ToLowerInvariant();
+        var chave = (chatId, message.From.Id);
 
         try
         {
-            var resposta = comando switch
+            string? resposta;
+
+            if (_estados.TryGetValue(chave, out var estado))
             {
-                "/start" => Boas_Vindas,
-                "/entrar" => await EntrarAsync(chatId, message.From, ct),
-                "/despesa" => await DespesaAsync(chatId, message.From, texto, ct),
-                "/desfazer" => await DesfazerAsync(chatId, message.From, ct),
-                "/saldo" => await SaldoAsync(chatId, ct),
-                "/fechar" => await FecharAsync(chatId, ct),
-                "/extrato" => await ExtratoAsync(chatId, ct),
-                _ => (string?)null,
-            };
+                resposta = await ContinuarFluxoAsync(chave, estado, texto, ct);
+            }
+            else
+            {
+                var comando = texto.Split(' ', 2)[0].ToLowerInvariant();
+                resposta = comando switch
+                {
+                    "/start" => Boas_Vindas,
+                    "/entrar" => await EntrarAsync(chatId, message.From, ct),
+                    "/despesa" => await DespesaAsync(chatId, message.From, texto, ct),
+                    "/desfazer" => await DesfazerAsync(chatId, message.From, ct),
+                    "/editar" => await IniciarEdicaoAsync(chave, chatId, ct),
+                    "/excluir" => await IniciarExclusaoAsync(chave, chatId, ct),
+                    "/cancelar" => CancelarFluxo(chave),
+                    "/saldo" => await SaldoAsync(chatId, ct),
+                    "/fechar" => await FecharAsync(chatId, ct),
+                    "/extrato" => await ExtratoAsync(chatId, ct),
+                    _ => (string?)null,
+                };
+            }
 
             if (resposta is not null)
                 await botClient.SendMessage(chatId, resposta, cancellationToken: ct);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Falha processando o comando {Comando} no chat {ChatId}", comando, chatId);
-            await botClient.SendMessage(chatId, "Deu ruim processando esse comando. Tenta de novo?", cancellationToken: ct);
+            logger.LogError(ex, "Falha processando mensagem no chat {ChatId}", chatId);
+            _estados.TryRemove(chave, out _);
+            await botClient.SendMessage(chatId, "Deu ruim processando isso. Tenta de novo?", cancellationToken: ct);
         }
     }
 
@@ -58,6 +82,8 @@ public class UpdateHandler(
         "/entrar — entra na resenha\n" +
         "/despesa <valor> <descrição> — lança um gasto, dividido igual entre quem já entrou\n" +
         "/desfazer — apaga a sua última despesa lançada\n" +
+        "/editar — corrige um lançamento (mostra a lista, você escolhe o número)\n" +
+        "/excluir — remove um lançamento (mostra a lista, você escolhe o número)\n" +
         "/saldo — quem deve e quem tem a receber\n" +
         "/fechar — calcula as transferências mínimas pra quitar tudo\n" +
         "/extrato — últimos gastos lançados";
@@ -134,6 +160,113 @@ public class UpdateHandler(
         await db.SaveChangesAsync(ct);
 
         return $"Desfeito: \"{ultima.Descricao}\" de {ultima.Valor:C}.";
+    }
+
+    private Task<string> ContinuarFluxoAsync((long ChatId, long UserId) chave, EstadoConversa estado, string texto, CancellationToken ct)
+    {
+        if (texto.Trim().Equals("/cancelar", StringComparison.OrdinalIgnoreCase))
+            return Task.FromResult(CancelarFluxo(chave));
+
+        return estado.Etapa switch
+        {
+            EtapaFluxo.EscolhendoParaExcluir => ConcluirExclusaoAsync(chave, estado, texto, ct),
+            EtapaFluxo.EscolhendoParaEditar => Task.FromResult(AvancarParaTextoDeEdicao(chave, estado, texto)),
+            EtapaFluxo.AguardandoNovoTexto => ConcluirEdicaoAsync(chave, estado, texto, ct),
+            _ => Task.FromResult("Deu ruim no meio do fluxo — manda /cancelar e tenta de novo."),
+        };
+    }
+
+    private string CancelarFluxo((long ChatId, long UserId) chave) =>
+        _estados.TryRemove(chave, out _) ? "Cancelado." : "Não tem nada pra cancelar.";
+
+    private async Task<string> IniciarExclusaoAsync((long ChatId, long UserId) chave, long chatId, CancellationToken ct)
+    {
+        var (lista, resposta) = await ListarParaEscolhaAsync(chatId, ct);
+        if (lista is null)
+            return resposta;
+
+        _estados[chave] = new EstadoConversa(EtapaFluxo.EscolhendoParaExcluir, lista);
+        return resposta + "\n\nManda o número do lançamento que quer excluir (ou /cancelar).";
+    }
+
+    private async Task<string> IniciarEdicaoAsync((long ChatId, long UserId) chave, long chatId, CancellationToken ct)
+    {
+        var (lista, resposta) = await ListarParaEscolhaAsync(chatId, ct);
+        if (lista is null)
+            return resposta;
+
+        _estados[chave] = new EstadoConversa(EtapaFluxo.EscolhendoParaEditar, lista);
+        return resposta + "\n\nManda o número do lançamento que quer editar (ou /cancelar).";
+    }
+
+    private async Task<(List<int>? Lista, string Resposta)> ListarParaEscolhaAsync(long chatId, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return (null, "Não tem despesa nenhuma lançada ainda.");
+
+        var despesas = await db.Despesas
+            .Where(d => d.GrupoId == grupo.Id)
+            .Include(d => d.PagoPor)
+            .OrderByDescending(d => d.CriadoEm)
+            .Take(15)
+            .ToListAsync(ct);
+
+        if (despesas.Count == 0)
+            return (null, "Não tem despesa nenhuma lançada ainda.");
+
+        var linhas = despesas.Select((d, i) => $"{i + 1}. {d.PagoPor?.Nome} pagou {d.Valor:C} — {d.Descricao} ({d.CriadoEm:dd/MM})");
+        return (despesas.Select(d => d.Id).ToList(), string.Join('\n', linhas));
+    }
+
+    private async Task<string> ConcluirExclusaoAsync((long ChatId, long UserId) chave, EstadoConversa estado, string texto, CancellationToken ct)
+    {
+        if (!int.TryParse(texto.Trim(), out var numero) || numero < 1 || numero > estado.DespesaIds.Count)
+            return $"Manda um número de 1 a {estado.DespesaIds.Count} (ou /cancelar).";
+
+        var despesaId = estado.DespesaIds[numero - 1];
+        _estados.TryRemove(chave, out _);
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var despesa = await db.Despesas.FindAsync([despesaId], ct);
+        if (despesa is null)
+            return "Esse lançamento já não existe mais.";
+
+        db.Despesas.Remove(despesa);
+        await db.SaveChangesAsync(ct);
+
+        return $"Excluído: \"{despesa.Descricao}\" de {despesa.Valor:C}.";
+    }
+
+    private string AvancarParaTextoDeEdicao((long ChatId, long UserId) chave, EstadoConversa estado, string texto)
+    {
+        if (!int.TryParse(texto.Trim(), out var numero) || numero < 1 || numero > estado.DespesaIds.Count)
+            return $"Manda um número de 1 a {estado.DespesaIds.Count} (ou /cancelar).";
+
+        var despesaId = estado.DespesaIds[numero - 1];
+        _estados[chave] = estado with { Etapa = EtapaFluxo.AguardandoNovoTexto, DespesaIdEscolhida = despesaId };
+
+        return "Manda o lançamento corrigido, no formato: <valor> <descrição>. Ex.: 34,22 uber pro zoológico";
+    }
+
+    private async Task<string> ConcluirEdicaoAsync((long ChatId, long UserId) chave, EstadoConversa estado, string texto, CancellationToken ct)
+    {
+        _estados.TryRemove(chave, out _);
+
+        if (!TentarExtrairValorEDescricaoLivre(texto, out var valor, out var descricao) || valor <= 0)
+            return "Formato inválido — o lançamento não foi alterado. Manda /editar de novo se quiser tentar outra vez.";
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var despesa = await db.Despesas.FindAsync([estado.DespesaIdEscolhida!.Value], ct);
+        if (despesa is null)
+            return "Esse lançamento já não existe mais.";
+
+        despesa.Valor = valor;
+        despesa.Descricao = descricao;
+        await db.SaveChangesAsync(ct);
+
+        return $"Corrigido: agora é {valor:C} ({descricao}).";
     }
 
     private async Task<string> SaldoAsync(long chatId, CancellationToken ct)
@@ -217,16 +350,23 @@ public class UpdateHandler(
     /// Extrai valor e descrição de "/despesa &lt;valor&gt; &lt;descrição&gt;", aceitando
     /// o "R$" opcional colado ("R$50,00") ou separado ("R$ 50,00") do número.
     /// </summary>
-    private static bool TentarExtrairValorEDescricao(string texto, out decimal valor, out string descricao)
+    private static bool TentarExtrairValorEDescricao(string texto, out decimal valor, out string descricao) =>
+        TentarExtrairValorEDescricaoDoIndice(texto, indiceInicial: 1, out valor, out descricao);
+
+    /// <summary>Mesma extração, mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar.</summary>
+    private static bool TentarExtrairValorEDescricaoLivre(string texto, out decimal valor, out string descricao) =>
+        TentarExtrairValorEDescricaoDoIndice(texto, indiceInicial: 0, out valor, out descricao);
+
+    private static bool TentarExtrairValorEDescricaoDoIndice(string texto, int indiceInicial, out decimal valor, out string descricao)
     {
         valor = 0;
         descricao = string.Empty;
 
         var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (partes.Length < 3)
+        if (partes.Length < indiceInicial + 2)
             return false;
 
-        var indiceValor = 1;
+        var indiceValor = indiceInicial;
         var tokenValor = partes[indiceValor];
 
         if (tokenValor.Equals("R$", StringComparison.OrdinalIgnoreCase))
