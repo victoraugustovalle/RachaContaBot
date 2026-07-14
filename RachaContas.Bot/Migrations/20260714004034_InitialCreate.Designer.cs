@@ -11,7 +11,7 @@ using RachaContas.Bot.Data;
 namespace RachaContas.Bot.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260714000928_InitialCreate")]
+    [Migration("20260714004034_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -36,9 +36,6 @@ namespace RachaContas.Bot.Migrations
                     b.Property<int>("GrupoId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("PagoPorId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<int>("PagoPorParticipanteId")
                         .HasColumnType("INTEGER");
 
@@ -50,7 +47,7 @@ namespace RachaContas.Bot.Migrations
 
                     b.HasIndex("GrupoId");
 
-                    b.HasIndex("PagoPorId");
+                    b.HasIndex("PagoPorParticipanteId");
 
                     b.ToTable("Despesas");
                 });
@@ -121,7 +118,9 @@ namespace RachaContas.Bot.Migrations
 
                     b.HasOne("RachaContas.Bot.Models.Participante", "PagoPor")
                         .WithMany()
-                        .HasForeignKey("PagoPorId");
+                        .HasForeignKey("PagoPorParticipanteId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("Grupo");
 

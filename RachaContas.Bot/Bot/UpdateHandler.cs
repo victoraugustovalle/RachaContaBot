@@ -79,11 +79,8 @@ public class UpdateHandler(
 
     private async Task<string> DespesaAsync(long chatId, User from, string texto, CancellationToken ct)
     {
-        var partes = texto.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        if (partes.Length < 3 || !TentarParsearValor(partes[1], out var valor) || valor <= 0)
+        if (!TentarExtrairValorEDescricao(texto, out var valor, out var descricao) || valor <= 0)
             return "Formato: /despesa <valor> <descrição>. Ex.: /despesa 45,50 Uber pro aeroporto";
-
-        var descricao = partes[2];
 
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var grupo = await ObterOuCriarGrupoAsync(db, chatId, ct);
@@ -93,8 +90,6 @@ public class UpdateHandler(
             return $"{NomeDe(from)}, manda /entrar primeiro antes de lançar uma despesa.";
 
         var participantesDoGrupo = await db.Participantes.Where(p => p.GrupoId == grupo.Id).ToListAsync(ct);
-        if (participantesDoGrupo.Count < 2)
-            return "Só tem uma pessoa na resenha ainda — chama o pessoal pra dar /entrar antes de dividir despesa.";
 
         var despesa = new Despesa
         {
@@ -111,7 +106,8 @@ public class UpdateHandler(
         await db.SaveChangesAsync(ct);
 
         var cota = valor / participantesDoGrupo.Count;
-        return $"Beleza! {NomeDe(from)} pagou {valor:C} em \"{descricao}\", dividido entre {participantesDoGrupo.Count} pessoas ({cota:C} cada).";
+        var pessoas = participantesDoGrupo.Count == 1 ? "1 pessoa (só você por enquanto)" : $"{participantesDoGrupo.Count} pessoas";
+        return $"Beleza! {NomeDe(from)} pagou {valor:C} em \"{descricao}\", dividido entre {pessoas} ({cota:C} cada).";
     }
 
     private async Task<string> SaldoAsync(long chatId, CancellationToken ct)
@@ -190,6 +186,41 @@ public class UpdateHandler(
 
     private static string NomeDe(User user) =>
         string.IsNullOrWhiteSpace(user.LastName) ? user.FirstName : $"{user.FirstName} {user.LastName}";
+
+    /// <summary>
+    /// Extrai valor e descrição de "/despesa &lt;valor&gt; &lt;descrição&gt;", aceitando
+    /// o "R$" opcional colado ("R$50,00") ou separado ("R$ 50,00") do número.
+    /// </summary>
+    private static bool TentarExtrairValorEDescricao(string texto, out decimal valor, out string descricao)
+    {
+        valor = 0;
+        descricao = string.Empty;
+
+        var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (partes.Length < 3)
+            return false;
+
+        var indiceValor = 1;
+        var tokenValor = partes[indiceValor];
+
+        if (tokenValor.Equals("R$", StringComparison.OrdinalIgnoreCase))
+        {
+            indiceValor++;
+            if (indiceValor >= partes.Length)
+                return false;
+            tokenValor = partes[indiceValor];
+        }
+        else if (tokenValor.StartsWith("R$", StringComparison.OrdinalIgnoreCase))
+        {
+            tokenValor = tokenValor[2..];
+        }
+
+        if (!TentarParsearValor(tokenValor, out valor))
+            return false;
+
+        descricao = string.Join(' ', partes.Skip(indiceValor + 1));
+        return !string.IsNullOrWhiteSpace(descricao);
+    }
 
     private static bool TentarParsearValor(string texto, out decimal valor) =>
         decimal.TryParse(texto, NumberStyles.Number, CultureInfo.InvariantCulture, out valor) ||

@@ -53,7 +53,6 @@ namespace RachaContas.Bot.Migrations
                         .Annotation("Sqlite:Autoincrement", true),
                     GrupoId = table.Column<int>(type: "INTEGER", nullable: false),
                     PagoPorParticipanteId = table.Column<int>(type: "INTEGER", nullable: false),
-                    PagoPorId = table.Column<int>(type: "INTEGER", nullable: true),
                     Descricao = table.Column<string>(type: "TEXT", nullable: false),
                     Valor = table.Column<decimal>(type: "TEXT", precision: 10, scale: 2, nullable: false),
                     CriadoEm = table.Column<DateTime>(type: "TEXT", nullable: false)
@@ -68,10 +67,11 @@ namespace RachaContas.Bot.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                     table.ForeignKey(
-                        name: "FK_Despesas_Participantes_PagoPorId",
-                        column: x => x.PagoPorId,
+                        name: "FK_Despesas_Participantes_PagoPorParticipanteId",
+                        column: x => x.PagoPorParticipanteId,
                         principalTable: "Participantes",
-                        principalColumn: "Id");
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -109,9 +109,9 @@ namespace RachaContas.Bot.Migrations
                 column: "GrupoId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Despesas_PagoPorId",
+                name: "IX_Despesas_PagoPorParticipanteId",
                 table: "Despesas",
-                column: "PagoPorId");
+                column: "PagoPorParticipanteId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Grupos_TelegramChatId",

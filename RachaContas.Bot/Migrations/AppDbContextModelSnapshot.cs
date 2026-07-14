@@ -33,9 +33,6 @@ namespace RachaContas.Bot.Migrations
                     b.Property<int>("GrupoId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("PagoPorId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<int>("PagoPorParticipanteId")
                         .HasColumnType("INTEGER");
 
@@ -47,7 +44,7 @@ namespace RachaContas.Bot.Migrations
 
                     b.HasIndex("GrupoId");
 
-                    b.HasIndex("PagoPorId");
+                    b.HasIndex("PagoPorParticipanteId");
 
                     b.ToTable("Despesas");
                 });
@@ -118,7 +115,9 @@ namespace RachaContas.Bot.Migrations
 
                     b.HasOne("RachaContas.Bot.Models.Participante", "PagoPor")
                         .WithMany()
-                        .HasForeignKey("PagoPorId");
+                        .HasForeignKey("PagoPorParticipanteId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("Grupo");
 
