@@ -15,7 +15,7 @@ public class UpdateHandler(
     SaldoCalculator saldoCalculator,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
-    private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto }
+    private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto, ConfirmandoLimpeza }
 
     private record EstadoConversa(EtapaFluxo Etapa, IReadOnlyList<int> DespesaIds, int? DespesaIdEscolhida = null);
 
@@ -52,6 +52,7 @@ public class UpdateHandler(
                     "/desfazer" => await DesfazerAsync(chatId, message.From, ct),
                     "/editar" => await IniciarEdicaoAsync(chave, chatId, ct),
                     "/excluir" => await IniciarExclusaoAsync(chave, chatId, ct),
+                    "/limpar" => await IniciarLimpezaAsync(chave, chatId, ct),
                     "/cancelar" => CancelarFluxo(chave),
                     "/saldo" => await SaldoAsync(chatId, ct),
                     "/fechar" => await FecharAsync(chatId, ct),
@@ -84,6 +85,7 @@ public class UpdateHandler(
         "/desfazer — apaga a sua última despesa lançada\n" +
         "/editar — corrige um lançamento (mostra a lista, você escolhe o número)\n" +
         "/excluir — remove um lançamento (mostra a lista, você escolhe o número)\n" +
+        "/limpar — apaga TODAS as despesas do grupo (pede confirmação)\n" +
         "/saldo — quem deve e quem tem a receber\n" +
         "/fechar — calcula as transferências mínimas pra quitar tudo\n" +
         "/extrato — últimos gastos lançados";
@@ -172,6 +174,7 @@ public class UpdateHandler(
             EtapaFluxo.EscolhendoParaExcluir => ConcluirExclusaoAsync(chave, estado, texto, ct),
             EtapaFluxo.EscolhendoParaEditar => Task.FromResult(AvancarParaTextoDeEdicao(chave, estado, texto)),
             EtapaFluxo.AguardandoNovoTexto => ConcluirEdicaoAsync(chave, estado, texto, ct),
+            EtapaFluxo.ConfirmandoLimpeza => ConcluirLimpezaAsync(chave, chave.ChatId, texto, ct),
             _ => Task.FromResult("Deu ruim no meio do fluxo — manda /cancelar e tenta de novo."),
         };
     }
@@ -197,6 +200,41 @@ public class UpdateHandler(
 
         _estados[chave] = new EstadoConversa(EtapaFluxo.EscolhendoParaEditar, lista);
         return resposta + "\n\nManda o número do lançamento que quer editar (ou /cancelar).";
+    }
+
+    private async Task<string> IniciarLimpezaAsync((long ChatId, long UserId) chave, long chatId, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return "Não tem nada pra limpar ainda.";
+
+        var total = await db.Despesas.CountAsync(d => d.GrupoId == grupo.Id, ct);
+        if (total == 0)
+            return "Não tem nenhuma despesa lançada ainda.";
+
+        _estados[chave] = new EstadoConversa(EtapaFluxo.ConfirmandoLimpeza, []);
+        return $"Isso vai apagar {total} despesa(s) lançada(s) nesse grupo — não dá pra desfazer depois. " +
+               "Quem já entrou na resenha continua registrado. Manda /confirmar pra seguir, ou /cancelar.";
+    }
+
+    private async Task<string> ConcluirLimpezaAsync((long ChatId, long UserId) chave, long chatId, string texto, CancellationToken ct)
+    {
+        _estados.TryRemove(chave, out _);
+
+        if (!texto.Trim().Equals("/confirmar", StringComparison.OrdinalIgnoreCase))
+            return "Limpeza cancelada — nada foi apagado.";
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return "Não tinha nada pra limpar mesmo.";
+
+        var despesas = await db.Despesas.Where(d => d.GrupoId == grupo.Id).ToListAsync(ct);
+        db.Despesas.RemoveRange(despesas);
+        await db.SaveChangesAsync(ct);
+
+        return $"Pronto — {despesas.Count} despesa(s) apagada(s). Quem já tinha entrado continua registrado.";
     }
 
     private async Task<(List<int>? Lista, string Resposta)> ListarParaEscolhaAsync(long chatId, CancellationToken ct)
