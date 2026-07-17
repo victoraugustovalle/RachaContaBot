@@ -1,9 +1,9 @@
 namespace RachaContas.Bot.Services;
 
 /// <summary>Saldo líquido de um participante: positivo = tem a receber, negativo = deve.</summary>
-public record SaldoParticipante(string Nome, decimal Valor);
+public record SaldoParticipante(int ParticipanteId, string Nome, decimal Valor);
 
-public record Transferencia(string De, string Para, decimal Valor);
+public record Transferencia(int DevedorId, string De, int CredorId, string Para, decimal Valor);
 
 /// <summary>
 /// Algoritmo guloso de simplificação de dívidas: casa repetidamente o maior
@@ -18,15 +18,15 @@ public static class DebtSimplifier
 
     public static IReadOnlyList<Transferencia> Simplificar(IEnumerable<SaldoParticipante> saldos)
     {
-        var credores = new List<(string Nome, decimal Valor)>();
-        var devedores = new List<(string Nome, decimal Valor)>();
+        var credores = new List<(int Id, string Nome, decimal Valor)>();
+        var devedores = new List<(int Id, string Nome, decimal Valor)>();
 
         foreach (var s in saldos)
         {
             if (s.Valor > Tolerancia)
-                credores.Add((s.Nome, s.Valor));
+                credores.Add((s.ParticipanteId, s.Nome, s.Valor));
             else if (s.Valor < -Tolerancia)
-                devedores.Add((s.Nome, -s.Valor)); // guarda como valor positivo — "quanto essa pessoa deve"
+                devedores.Add((s.ParticipanteId, s.Nome, -s.Valor)); // guarda como valor positivo — "quanto essa pessoa deve"
         }
 
         var transferencias = new List<Transferencia>();
@@ -40,7 +40,7 @@ public static class DebtSimplifier
             var devedor = devedores[0];
             var valor = Math.Min(credor.Valor, devedor.Valor);
 
-            transferencias.Add(new Transferencia(devedor.Nome, credor.Nome, Math.Round(valor, 2)));
+            transferencias.Add(new Transferencia(devedor.Id, devedor.Nome, credor.Id, credor.Nome, Math.Round(valor, 2)));
 
             var credorRestante = credor.Valor - valor;
             var devedorRestante = devedor.Valor - valor;
@@ -48,12 +48,12 @@ public static class DebtSimplifier
             if (credorRestante <= Tolerancia)
                 credores.RemoveAt(0);
             else
-                credores[0] = (credor.Nome, credorRestante);
+                credores[0] = (credor.Id, credor.Nome, credorRestante);
 
             if (devedorRestante <= Tolerancia)
                 devedores.RemoveAt(0);
             else
-                devedores[0] = (devedor.Nome, devedorRestante);
+                devedores[0] = (devedor.Id, devedor.Nome, devedorRestante);
         }
 
         return transferencias;

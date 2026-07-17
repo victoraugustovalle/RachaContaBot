@@ -17,6 +17,9 @@ if (!string.IsNullOrWhiteSpace(telegramToken))
 builder.Services.AddSingleton<SaldoCalculator>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<CambioService>();
+builder.Services.AddSingleton<TelegramNotificacaoService>();
+builder.Services.AddSingleton<SolicitacoesChavePixPendentes>();
+builder.Services.AddSingleton<PagamentoService>();
 builder.Services.AddSingleton<UpdateHandler>();
 builder.Services.AddHostedService<Worker>();
 

@@ -10,14 +10,16 @@ public class DebtSimplifierTests
     {
         var saldos = new[]
         {
-            new SaldoParticipante("Ana", 50m),
-            new SaldoParticipante("Bia", -50m),
+            new SaldoParticipante(1, "Ana", 50m),
+            new SaldoParticipante(2, "Bia", -50m),
         };
 
         var resultado = DebtSimplifier.Simplificar(saldos);
 
         var t = Assert.Single(resultado);
+        Assert.Equal(2, t.DevedorId);
         Assert.Equal("Bia", t.De);
+        Assert.Equal(1, t.CredorId);
         Assert.Equal("Ana", t.Para);
         Assert.Equal(50m, t.Valor);
     }
@@ -27,9 +29,9 @@ public class DebtSimplifierTests
     {
         var saldos = new[]
         {
-            new SaldoParticipante("Ana", -30m),
-            new SaldoParticipante("Bia", 10m),
-            new SaldoParticipante("Caio", 20m),
+            new SaldoParticipante(1, "Ana", -30m),
+            new SaldoParticipante(2, "Bia", 10m),
+            new SaldoParticipante(3, "Caio", 20m),
         };
 
         var resultado = DebtSimplifier.Simplificar(saldos);
@@ -46,9 +48,9 @@ public class DebtSimplifierTests
         // de todo mundo já é zero (ninguém tem saldo residual), então nada a fazer.
         var saldos = new[]
         {
-            new SaldoParticipante("Ana", 0m),
-            new SaldoParticipante("Bia", 0m),
-            new SaldoParticipante("Caio", 0m),
+            new SaldoParticipante(1, "Ana", 0m),
+            new SaldoParticipante(2, "Bia", 0m),
+            new SaldoParticipante(3, "Caio", 0m),
         };
 
         var resultado = DebtSimplifier.Simplificar(saldos);
@@ -65,9 +67,9 @@ public class DebtSimplifierTests
         var saldoAna = 10m - cota;
         var saldos = new[]
         {
-            new SaldoParticipante("Ana", saldoAna),
-            new SaldoParticipante("Bia", -cota),
-            new SaldoParticipante("Caio", -cota),
+            new SaldoParticipante(1, "Ana", saldoAna),
+            new SaldoParticipante(2, "Bia", -cota),
+            new SaldoParticipante(3, "Caio", -cota),
         };
 
         var resultado = DebtSimplifier.Simplificar(saldos);

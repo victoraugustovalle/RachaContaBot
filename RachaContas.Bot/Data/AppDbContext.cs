@@ -9,6 +9,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Participante> Participantes => Set<Participante>();
     public DbSet<Despesa> Despesas => Set<Despesa>();
     public DbSet<DespesaParticipante> DespesaParticipantes => Set<DespesaParticipante>();
+    public DbSet<Fechamento> Fechamentos => Set<Fechamento>();
+    public DbSet<Cobranca> Cobrancas => Set<Cobranca>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,5 +45,24 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
         modelBuilder.Entity<DespesaParticipante>()
             .HasKey(dp => new { dp.DespesaId, dp.ParticipanteId });
+
+        modelBuilder.Entity<Cobranca>()
+            .Property(c => c.Valor)
+            .HasPrecision(10, 2);
+
+        // Restrict nas duas pontas (devedor/credor) pelo mesmo motivo do PagoPor em
+        // Despesa: sem isso o EF tentaria um delete em cascata duplo (dois caminhos
+        // até Participante), o que o SQL Server/SQLite rejeita ou o EF nem gera direito.
+        modelBuilder.Entity<Cobranca>()
+            .HasOne(c => c.Devedor)
+            .WithMany()
+            .HasForeignKey(c => c.DevedorParticipanteId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<Cobranca>()
+            .HasOne(c => c.Credor)
+            .WithMany()
+            .HasForeignKey(c => c.CredorParticipanteId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

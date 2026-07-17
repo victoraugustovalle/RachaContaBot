@@ -17,6 +17,48 @@ namespace RachaContas.Bot.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.9");
 
+            modelBuilder.Entity("RachaContas.Bot.Models.Cobranca", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("CredorParticipanteId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DevedorParticipanteId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("FechamentoId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("PagoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PixCopiaECola")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("Valor")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CredorParticipanteId");
+
+                    b.HasIndex("DevedorParticipanteId");
+
+                    b.HasIndex("FechamentoId");
+
+                    b.ToTable("Cobrancas");
+                });
+
             modelBuilder.Entity("RachaContas.Bot.Models.Despesa", b =>
                 {
                     b.Property<int>("Id")
@@ -75,6 +117,25 @@ namespace RachaContas.Bot.Migrations
                     b.ToTable("DespesaParticipantes");
                 });
 
+            modelBuilder.Entity("RachaContas.Bot.Models.Fechamento", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("GrupoId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GrupoId");
+
+                    b.ToTable("Fechamentos");
+                });
+
             modelBuilder.Entity("RachaContas.Bot.Models.Grupo", b =>
                 {
                     b.Property<int>("Id")
@@ -98,11 +159,17 @@ namespace RachaContas.Bot.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ChavePix")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("GrupoId")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Nome")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NomeCompleto")
                         .HasColumnType("TEXT");
 
                     b.Property<long>("TelegramUserId")
@@ -114,6 +181,33 @@ namespace RachaContas.Bot.Migrations
                         .IsUnique();
 
                     b.ToTable("Participantes");
+                });
+
+            modelBuilder.Entity("RachaContas.Bot.Models.Cobranca", b =>
+                {
+                    b.HasOne("RachaContas.Bot.Models.Participante", "Credor")
+                        .WithMany()
+                        .HasForeignKey("CredorParticipanteId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RachaContas.Bot.Models.Participante", "Devedor")
+                        .WithMany()
+                        .HasForeignKey("DevedorParticipanteId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RachaContas.Bot.Models.Fechamento", "Fechamento")
+                        .WithMany("Cobrancas")
+                        .HasForeignKey("FechamentoId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Credor");
+
+                    b.Navigation("Devedor");
+
+                    b.Navigation("Fechamento");
                 });
 
             modelBuilder.Entity("RachaContas.Bot.Models.Despesa", b =>
@@ -154,6 +248,17 @@ namespace RachaContas.Bot.Migrations
                     b.Navigation("Participante");
                 });
 
+            modelBuilder.Entity("RachaContas.Bot.Models.Fechamento", b =>
+                {
+                    b.HasOne("RachaContas.Bot.Models.Grupo", "Grupo")
+                        .WithMany()
+                        .HasForeignKey("GrupoId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Grupo");
+                });
+
             modelBuilder.Entity("RachaContas.Bot.Models.Participante", b =>
                 {
                     b.HasOne("RachaContas.Bot.Models.Grupo", "Grupo")
@@ -168,6 +273,11 @@ namespace RachaContas.Bot.Migrations
             modelBuilder.Entity("RachaContas.Bot.Models.Despesa", b =>
                 {
                     b.Navigation("Participantes");
+                });
+
+            modelBuilder.Entity("RachaContas.Bot.Models.Fechamento", b =>
+                {
+                    b.Navigation("Cobrancas");
                 });
 
             modelBuilder.Entity("RachaContas.Bot.Models.Grupo", b =>

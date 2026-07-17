@@ -38,6 +38,6 @@ public class SaldoCalculator
             }
         }
 
-        return participantes.Select(p => new SaldoParticipante(p.Nome, saldoPorId[p.Id])).ToList();
+        return participantes.Select(p => new SaldoParticipante(p.Id, p.Nome, saldoPorId[p.Id])).ToList();
     }
 }

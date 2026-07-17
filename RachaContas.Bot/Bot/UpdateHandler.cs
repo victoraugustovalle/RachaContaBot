@@ -4,9 +4,11 @@ using RachaContas.Bot.Data;
 using RachaContas.Bot.Models;
 using RachaContas.Bot.Services;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace RachaContas.Bot.Bot;
 
@@ -14,6 +16,8 @@ public class UpdateHandler(
     IDbContextFactory<AppDbContext> dbFactory,
     SaldoCalculator saldoCalculator,
     CambioService cambioService,
+    PagamentoService pagamentoService,
+    SolicitacoesChavePixPendentes solicitacoesPendentes,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
     private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto, ConfirmandoLimpeza, ConfirmandoMoedaEstrangeira }
@@ -33,6 +37,12 @@ public class UpdateHandler(
 
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken ct)
     {
+        if (update.CallbackQuery is { } callbackQuery)
+        {
+            await TratarCallbackQueryAsync(botClient, callbackQuery, ct);
+            return;
+        }
+
         var message = update.Message;
         if (message?.Text is not { } texto || message.From is null)
             return;
@@ -44,7 +54,42 @@ public class UpdateHandler(
         {
             string? resposta;
 
-            if (_estados.TryGetValue(chave, out var estado))
+            if (message.Chat.Type == ChatType.Private && solicitacoesPendentes.TryConsumirNome(message.From.Id, out var participanteIdAguardandoNome))
+            {
+                var nomeCompleto = texto.Trim();
+                if (string.IsNullOrWhiteSpace(nomeCompleto) || nomeCompleto.StartsWith('/'))
+                {
+                    solicitacoesPendentes.DevolverNome(message.From.Id, participanteIdAguardandoNome);
+                    resposta = "Manda seu nome completo (não pode ser vazio nem um comando).";
+                }
+                else
+                {
+                    await pagamentoService.SalvarNomeCompletoAsync(participanteIdAguardandoNome, nomeCompleto, ct);
+                    resposta = await pagamentoService.GerarCobrancasPendentesAsync(participanteIdAguardandoNome, ct);
+                }
+            }
+            else if (message.Chat.Type == ChatType.Private && solicitacoesPendentes.TryConsumirChave(message.From.Id, out var participanteIdAguardandoChave))
+            {
+                if (ChavePixParser.TentarExtrair(texto, out var chaveNormalizada, out var erroChave))
+                {
+                    var temNomeCompleto = await pagamentoService.SalvarChavePixAsync(participanteIdAguardandoChave, chaveNormalizada, ct);
+                    if (temNomeCompleto)
+                    {
+                        resposta = await pagamentoService.GerarCobrancasPendentesAsync(participanteIdAguardandoChave, ct);
+                    }
+                    else
+                    {
+                        solicitacoesPendentes.RegistrarNome(message.From.Id, participanteIdAguardandoChave);
+                        resposta = "Chave Pix salva! Agora manda seu nome completo — é o que vai aparecer pro pagador no Pix.";
+                    }
+                }
+                else
+                {
+                    solicitacoesPendentes.DevolverChave(message.From.Id, participanteIdAguardandoChave);
+                    resposta = erroChave;
+                }
+            }
+            else if (_estados.TryGetValue(chave, out var estado))
             {
                 resposta = await ContinuarFluxoAsync(chave, estado, texto, ct);
             }
@@ -53,8 +98,8 @@ public class UpdateHandler(
                 var comando = texto.Split(' ', 2)[0].ToLowerInvariant();
                 resposta = comando switch
                 {
-                    "/start" => Boas_Vindas,
-                    "/entrar" => await EntrarAsync(chatId, message.From, ct),
+                    "/start" => BoasVindas,
+                    "/entrar" => await EntrarAsync(chatId, message.From, texto, ct),
                     "/despesa" => await DespesaAsync(chatId, message.From, texto, ct),
                     "/desfazer" => await DesfazerAsync(chatId, message.From, ct),
                     "/editar" => await IniciarEdicaoAsync(chave, chatId, ct),
@@ -63,6 +108,8 @@ public class UpdateHandler(
                     "/cancelar" => CancelarFluxo(chave),
                     "/saldo" => await SaldoAsync(chatId, ct),
                     "/fechar" => await FecharAsync(chatId, ct),
+                    "/pagar" => await PagarAsync(chatId, ct),
+                    "/chavepix" => await DefinirChavePixAsync(chatId, message.From, texto, ct),
                     "/extrato" => await ExtratoAsync(chatId, ct),
                     _ => (string?)null,
                 };
@@ -85,9 +132,10 @@ public class UpdateHandler(
         return Task.CompletedTask;
     }
 
-    private const string Boas_Vindas =
+    private const string BoasVindas =
         "Oi! Eu divido as contas do grupo pra você.\n\n" +
         "/entrar — entra na resenha\n" +
+        "/entrar <nome> — adiciona alguém manualmente (pra quem não usa o Telegram ou não vai mandar o comando)\n" +
         "/despesa <valor> <descrição> — lança um gasto, dividido igual entre quem já entrou " +
         "(aceita moeda estrangeira, ex.: $50 uber — eu confirmo e converto pra você)\n" +
         "/desfazer — apaga a sua última despesa lançada\n" +
@@ -96,12 +144,19 @@ public class UpdateHandler(
         "/limpar — apaga TODAS as despesas do grupo (pede confirmação)\n" +
         "/saldo — quem deve e quem tem a receber\n" +
         "/fechar — calcula as transferências mínimas pra quitar tudo\n" +
+        "/pagar — gera os Pix pra quitar o que o /fechar calculou (opcional)\n" +
+        "/chavepix <tipo> <chave> — cadastra ou corrige sua chave Pix (tipo: telefone, cpf, email ou aleatoria)\n" +
         "/extrato — últimos gastos lançados";
 
-    private async Task<string> EntrarAsync(long chatId, User from, CancellationToken ct)
+    private async Task<string> EntrarAsync(long chatId, User from, string texto, CancellationToken ct)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
         var grupo = await ObterOuCriarGrupoAsync(db, chatId, ct);
+
+        var nomeManual = texto.Split(' ', 2) is [_, var resto] && !string.IsNullOrWhiteSpace(resto) ? resto.Trim() : null;
+        if (nomeManual is not null)
+            return await EntrarManualAsync(db, grupo, nomeManual, ct);
+
         var nome = NomeDe(from);
 
         var jaExiste = await db.Participantes.AnyAsync(p => p.GrupoId == grupo.Id && p.TelegramUserId == from.Id, ct);
@@ -112,6 +167,29 @@ public class UpdateHandler(
         await db.SaveChangesAsync(ct);
 
         return $"{nome} entrou! Use /despesa quando pagar alguma coisa pelo grupo.";
+    }
+
+    // "/entrar <nome>" adiciona alguém que não vai (ou não pode) mandar o comando pelo
+    // próprio Telegram. Ganha um Id negativo (nunca colide com um TelegramUserId de
+    // verdade, que é sempre positivo) só pra existir na tabela; entra nas divisões
+    // normalmente, mas não recebe nada do bot no privado (nem Pix) porque não tem
+    // conta de verdade por trás.
+    private static async Task<string> EntrarManualAsync(AppDbContext db, Grupo grupo, string nome, CancellationToken ct)
+    {
+        var jaExiste = await db.Participantes.AnyAsync(p => p.GrupoId == grupo.Id && p.Nome == nome, ct);
+        if (jaExiste)
+            return $"{nome} já tá na resenha.";
+
+        var menorIdAtual = await db.Participantes
+            .Where(p => p.GrupoId == grupo.Id)
+            .Select(p => (long?)p.TelegramUserId)
+            .MinAsync(ct) ?? 0;
+        var idManual = Math.Min(-1, menorIdAtual - 1);
+
+        db.Participantes.Add(new Participante { GrupoId = grupo.Id, TelegramUserId = idManual, Nome = nome });
+        await db.SaveChangesAsync(ct);
+
+        return $"{nome} entrou na resenha (adicionado manualmente — não recebe mensagens do bot, então pode entrar nas despesas mas não lança nem recebe Pix sozinho).";
     }
 
     private async Task<string> DespesaAsync(long chatId, User from, string texto, CancellationToken ct)
@@ -386,7 +464,32 @@ public class UpdateHandler(
             _ => $"{s.Nome}: tá quite",
         });
 
-        return "Saldos:\n" + string.Join('\n', linhas);
+        var resposta = "Saldos:\n" + string.Join('\n', linhas);
+
+        var ultimoFechamento = await db.Fechamentos
+            .Where(f => f.GrupoId == grupo.Id)
+            .OrderByDescending(f => f.CriadoEm)
+            .Include(f => f.Cobrancas).ThenInclude(c => c.Devedor)
+            .Include(f => f.Cobrancas).ThenInclude(c => c.Credor)
+            .FirstOrDefaultAsync(ct);
+
+        if (ultimoFechamento is { Cobrancas.Count: > 0 })
+        {
+            var linhasPagamento = ultimoFechamento.Cobrancas.Select(c =>
+            {
+                var status = c.Status switch
+                {
+                    StatusCobranca.Paga => "✅ pago",
+                    StatusCobranca.Cancelada => "❌ cancelado",
+                    _ => "⏳ aguardando pagamento",
+                };
+                return $"{c.Devedor?.Nome} → {c.Credor?.Nome} ({c.Valor:C}): {status}";
+            });
+
+            resposta += "\n\nPagamentos do último /pagar:\n" + string.Join('\n', linhasPagamento);
+        }
+
+        return resposta;
     }
 
     private async Task<string> FecharAsync(long chatId, CancellationToken ct)
@@ -403,7 +506,98 @@ public class UpdateHandler(
             return "Já tá tudo quite — ninguém deve nada pra ninguém.";
 
         var linhas = transferencias.Select(t => $"{t.De} paga {t.Valor:C} pra {t.Para}");
-        return "Pra fechar a conta:\n" + string.Join('\n', linhas);
+        return "Pra fechar a conta:\n" + string.Join('\n', linhas) +
+               "\n\nQuer que eu gere os Pix pra fechar isso? Manda /pagar.";
+    }
+
+    private async Task<string> PagarAsync(long chatId, CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return "Ainda não tem ninguém na resenha — manda /entrar primeiro.";
+
+        return await pagamentoService.ProcessarPagamentoAsync(grupo.Id, chatId, ct);
+    }
+
+    private async Task<string> DefinirChavePixAsync(long chatId, User from, string texto, CancellationToken ct)
+    {
+        var argumentos = texto.Split(' ', 2) is [_, var resto] ? resto : string.Empty;
+        if (!ChavePixParser.TentarExtrair(argumentos, out var chaveNormalizada, out var erro))
+            return erro;
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var grupo = await ObterGrupoAsync(db, chatId, ct);
+        if (grupo is null)
+            return "Ainda não tem ninguém na resenha — manda /entrar primeiro.";
+
+        var participante = await db.Participantes.FirstOrDefaultAsync(p => p.GrupoId == grupo.Id && p.TelegramUserId == from.Id, ct);
+        if (participante is null)
+            return $"{NomeDe(from)}, manda /entrar primeiro antes de cadastrar a chave Pix.";
+
+        var temNomeCompleto = await pagamentoService.SalvarChavePixAsync(participante.Id, chaveNormalizada, ct);
+        if (!temNomeCompleto)
+        {
+            solicitacoesPendentes.RegistrarNome(from.Id, participante.Id);
+            return "Chave Pix salva! Agora me manda seu nome completo no privado (abre uma conversa comigo) — é o que vai aparecer pro pagador no Pix.";
+        }
+
+        return await pagamentoService.GerarCobrancasPendentesAsync(participante.Id, ct);
+    }
+
+    private async Task TratarCallbackQueryAsync(ITelegramBotClient botClient, CallbackQuery callbackQuery, CancellationToken ct)
+    {
+        var dados = callbackQuery.Data?.Split(':');
+        if (dados is not ["pix", var acao, var idTexto] || !int.TryParse(idTexto, out var cobrancaId))
+        {
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, cancellationToken: ct);
+            return;
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var cobranca = await db.Cobrancas.Include(c => c.Credor).FirstOrDefaultAsync(c => c.Id == cobrancaId, ct);
+        if (cobranca is null)
+        {
+            await botClient.AnswerCallbackQuery(callbackQuery.Id, "Essa cobrança não existe mais.", cancellationToken: ct);
+            return;
+        }
+
+        string texto;
+        switch (acao)
+        {
+            case "cancelar":
+                if (cobranca.Status is StatusCobranca.Pendente)
+                {
+                    cobranca.Status = StatusCobranca.Cancelada;
+                    await db.SaveChangesAsync(ct);
+                }
+                texto = "Cobrança cancelada.";
+                break;
+
+            case "paguei":
+                if (cobranca.Status == StatusCobranca.Paga)
+                {
+                    texto = "Já tava marcado como pago.";
+                }
+                else if (cobranca.Status == StatusCobranca.Pendente)
+                {
+                    cobranca.Status = StatusCobranca.Paga;
+                    cobranca.PagoEm = DateTime.UtcNow;
+                    await db.SaveChangesAsync(ct);
+                    texto = "Beleza, marquei como pago!";
+                }
+                else
+                {
+                    texto = "Essa cobrança não tá mais pendente.";
+                }
+                break;
+
+            default:
+                texto = "Ação desconhecida.";
+                break;
+        }
+
+        await botClient.AnswerCallbackQuery(callbackQuery.Id, texto, showAlert: true, cancellationToken: ct);
     }
 
     private async Task<string> ExtratoAsync(long chatId, CancellationToken ct)
@@ -453,11 +647,9 @@ public class UpdateHandler(
     private static string NomeDe(User user) =>
         string.IsNullOrWhiteSpace(user.LastName) ? user.FirstName : $"{user.FirstName} {user.LastName}";
 
-    /// <summary>
-    /// Extrai valor, moeda (null = BRL, sem conversão) e descrição de
-    /// "/despesa &lt;valor&gt; &lt;descrição&gt;" — aceita também o formato invertido
-    /// ("/despesa &lt;descrição&gt; &lt;valor&gt;"), erro de digitação comum.
-    /// </summary>
+    // Extrai valor, moeda (null = BRL, sem conversão) e descrição de "/despesa <valor>
+    // <descrição>" — aceita também o formato invertido ("/despesa <descrição> <valor>"),
+    // erro de digitação comum.
     private static bool TentarExtrairDespesa(string texto, out decimal valor, out string? moeda, out string descricao)
     {
         var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -478,12 +670,10 @@ public class UpdateHandler(
         return $"{simbolo}{valor:N2}";
     }
 
-    /// <summary>
-    /// Mesma extração de valor/descrição (aceitando os dois formatos, oficial e invertido),
-    /// mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar.
-    /// "moeda" é devolvida só porque a assinatura é compartilhada; quem chama a ignora
-    /// de propósito (edição sempre volta a ser BRL puro).
-    /// </summary>
+    // Mesma extração de valor/descrição (aceitando os dois formatos, oficial e invertido),
+    // mas pra texto livre sem o "/despesa" na frente — usado pelo fluxo de /editar. "moeda"
+    // é devolvida só porque a assinatura é compartilhada; quem chama a ignora de propósito
+    // (edição sempre volta a ser BRL puro).
     private static bool TentarExtrairValorEDescricaoLivre(string texto, out decimal valor, out string? moeda, out string descricao)
     {
         var partes = texto.Split(' ', StringSplitOptions.RemoveEmptyEntries);
