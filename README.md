@@ -1,6 +1,6 @@
 # RachaContas
 
-Bot de Telegram que divide despesas de um grupo (viagem, república, happy hour) e calcula o menor número de transferências pra fechar a conta — o mesmo tipo de simplificação de dívidas que o Splitwise faz.
+Bot de Telegram que divide despesas de um grupo (viagem, república, happy hour) e calcula o menor número de transferências pra fechar a conta, o mesmo tipo de simplificação de dívidas que o Splitwise faz.
 
 ## Sobre
 
