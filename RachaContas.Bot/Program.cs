@@ -1,9 +1,15 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RachaContas.Bot;
 using RachaContas.Bot.Bot;
 using RachaContas.Bot.Data;
 using RachaContas.Bot.Services;
 using Telegram.Bot;
+
+// Sem isso, o {valor:C} usado nas respostas do bot depende da cultura do SO. No
+// Windows local isso dá "R$" de graça, mas no container do fly.io não tem locale
+// configurado e o .NET cai pra cultura invariante, cujo símbolo de moeda é "¤".
+CultureInfo.DefaultThreadCurrentCulture = new CultureInfo("pt-BR");
 
 var builder = Host.CreateApplicationBuilder(args);
 
