@@ -1,6 +1,6 @@
 # RachaContas
 
-[![CI](https://github.com/victoraugusto3215/RachaContaBot/actions/workflows/ci.yml/badge.svg)](https://github.com/victoraugusto3215/RachaContaBot/actions/workflows/ci.yml)
+[![CI](https://github.com/victoraugustovalle/RachaContaBot/actions/workflows/ci.yml/badge.svg)](https://github.com/victoraugustovalle/RachaContaBot/actions/workflows/ci.yml)
 
 Bot de Telegram que divide despesas de um grupo (viagem, república, happy hour) e calcula o menor número de transferências pra fechar a conta, o mesmo tipo de simplificação de dívidas que o Splitwise faz.
 
