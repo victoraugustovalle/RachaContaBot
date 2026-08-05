@@ -12,6 +12,33 @@ A ideia surgiu de um problema chato e recorrente: depois de uma viagem em grupo,
 
 O fluxo é simples: cada participante manda `/entrar`, quem paga alguma coisa lança com `/despesa`, e quando a resenha termina alguém manda `/fechar` pra saber quem paga quanto pra quem, com o menor número de transferências possível, não uma transferência por despesa. Se quiser, dá pra ir além e gerar os Pix de cada transferência direto no chat, sem sair do Telegram.
 
+## Demonstração
+
+Um churrasco de verdade, simulado com amigos num grupo de teste no Telegram — do primeiro `/entrar` ao último Pix confirmado, sem cortes.
+
+<table>
+<tr>
+<td width="33%"><img src="docs/demo/demo-01.jpg" width="100%"><br><sub><b>1.</b> Participantes entram na resenha com <code>/entrar</code></sub></td>
+<td width="33%"><img src="docs/demo/demo-02.jpg" width="100%"><br><sub><b>2.</b> Mais gente entra e as primeiras despesas são lançadas (<code>/despesa Picanha 6Kg 234,76</code>)</sub></td>
+<td width="33%"><img src="docs/demo/demo-03.jpg" width="100%"><br><sub><b>3.</b> Despesa em formato livre (<code>cerveja R$124,88</code>) e a lista do <code>/editar</code></sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/demo/demo-04.jpg" width="100%"><br><sub><b>4.</b> Corrigindo um valor com <code>/editar</code> e lançando uma despesa em dólar</sub></td>
+<td width="33%"><img src="docs/demo/demo-05.jpg" width="100%"><br><sub><b>5.</b> Confirmação da cotação do dia e o <code>/extrato</code> com o histórico</sub></td>
+<td width="33%"><img src="docs/demo/demo-06.jpg" width="100%"><br><sub><b>6.</b> <code>/fechar</code> calcula as transferências mínimas pra zerar a conta</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/demo/demo-07.jpg" width="100%"><br><sub><b>7.</b> <code>/pagar</code> gera o primeiro QR code Pix, de verdade</sub></td>
+<td width="33%"><img src="docs/demo/demo-08.jpg" width="100%"><br><sub><b>8.</b> QR + copia-e-cola, com botão "Já paguei" pra confirmar</sub></td>
+<td width="33%"><img src="docs/demo/demo-09.jpg" width="100%"><br><sub><b>9.</b> Um Pix gerado automaticamente pra cada devedor</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/demo/demo-10.jpg" width="100%"><br><sub><b>10.</b> Confirmação manual de pagamento, direto no chat</sub></td>
+<td width="33%"><img src="docs/demo/demo-11.jpg" width="100%"><br><sub><b>11.</b> Os 9 Pix da resenha, todos gerados e enviados</sub></td>
+<td width="33%"><img src="docs/demo/demo-12.jpg" width="100%"><br><sub><b>12.</b> <code>/saldo</code> final — quem já pagou e quem ainda falta</sub></td>
+</tr>
+</table>
+
 ## Funcionalidades
 
 **Grupo e participantes**
@@ -206,3 +233,7 @@ dotnet test
 | Nada além disso | Frankfurter (câmbio) é uma API pública sem chave; QRCoder roda 100% local; não há gateway de pagamento nem serviço externo de Pix |
 
 `.gitignore` já exclui `bin/`, `obj/`, `*.db` e `appsettings.Local.json` — o arquivo do SQLite gerado localmente não deve ir pro repositório.
+
+---
+
+Se o RachaContas te ajudou ou você curtiu a ideia, considera deixar uma ⭐ no repositório — não custa nada e ajuda o projeto a ser encontrado por mais gente.
