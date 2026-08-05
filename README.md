@@ -209,7 +209,7 @@ dotnet test
 
 ## Demonstração
 
-Um churrasco de verdade, simulado com amigos num grupo de teste no Telegram — do primeiro `/entrar` ao último Pix confirmado, sem cortes.
+Um churrasco com amigos num grupo no Telegram — do primeiro `/entrar` ao último Pix confirmado, sem cortes.
 
 <table>
 <tr>
