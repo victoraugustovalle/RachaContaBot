@@ -18,6 +18,7 @@ public class UpdateHandler(
     CambioService cambioService,
     PagamentoService pagamentoService,
     SolicitacoesChavePixPendentes solicitacoesPendentes,
+    ExportadorCsv exportadorCsv,
     ILogger<UpdateHandler> logger) : IUpdateHandler
 {
     private enum EtapaFluxo { EscolhendoParaExcluir, EscolhendoParaEditar, AguardandoNovoTexto, ConfirmandoLimpeza, ConfirmandoMoedaEstrangeira }
@@ -111,6 +112,7 @@ public class UpdateHandler(
                     "/pagar" => await PagarAsync(chatId, ct),
                     "/chavepix" => await DefinirChavePixAsync(chatId, message.From, texto, ct),
                     "/extrato" => await ExtratoAsync(chatId, ct),
+                    "/extrato_csv" => await ExtratoCSVAsync(botClient, chatId, ct) ?? "Extrato enviado!",
                     _ => (string?)null,
                 };
             }
@@ -146,7 +148,8 @@ public class UpdateHandler(
         "/fechar — calcula as transferências mínimas pra quitar tudo\n" +
         "/pagar — gera os Pix pra quitar o que o /fechar calculou (opcional)\n" +
         "/chavepix <tipo> <chave> — cadastra ou corrige sua chave Pix (tipo: telefone, cpf, email ou aleatoria)\n" +
-        "/extrato — últimos gastos lançados";
+        "/extrato — últimos gastos lançados\n" +
+        "/extrato_csv — exporta Todas as despesas em Formato CSV";
 
     private async Task<string> EntrarAsync(long chatId, User from, string texto, CancellationToken ct)
     {
@@ -627,6 +630,42 @@ public class UpdateHandler(
         });
 
         return "Últimas despesas:\n" + string.Join('\n', linhas);
+    }
+
+    private async Task<string?> ExtratoCSVAsync(ITelegramBotClient botClient, long chatId, CancellationToken ct)
+    {
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var grupo = await ObterGrupoAsync(db, chatId, ct);
+            if (grupo is null)
+                return "Ainda não tem despesa nenhuma — manda /entrar e depois /despesa.";
+
+            var despesas = await db.Despesas
+                .Where(d => d.GrupoId == grupo.Id)
+                .Include(d => d.PagoPor)
+                .OrderBy(d => d.CriadoEm)
+                .ToListAsync(ct);
+
+            if (despesas.Count == 0)
+                return "Nenhuma despesa lançada ainda.";
+
+            var csvStream = exportadorCsv.GerarCsvDespesas(despesas);
+            csvStream.Seek(0, SeekOrigin.Begin);
+
+            await botClient.SendDocument(
+                chatId,
+                new InputFileStream(csvStream, $"extrato_{grupo.Id}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.csv"),
+                caption: "Extrato de todas as despesas do grupo",
+                cancellationToken: ct);
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Erro ao gerar CSV para chat {ChatId}", chatId);
+            return "Deu ruim gerando o arquivo CSV. Tenta de novo?";
+        }
     }
 
     private static async Task<Grupo> ObterOuCriarGrupoAsync(AppDbContext db, long chatId, CancellationToken ct)
